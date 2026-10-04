@@ -1,6 +1,9 @@
 # ricebowl
 
-A terminal user interface (TUI) for tracking live NCAA College Football scores, play-by-play, field position, drive charts, and player statistics using ESPN's public API. Built with Rust and Ratatui.
+A terminal user interface (TUI) for tracking live NCAA College Football scores, play-by-play, field position, drive charts, and player statistics using ESPN's unofficial API. Built with Rust and Ratatui.
+
+> [!WARNING]
+> **Disclaimer**: This application relies on ESPN's unofficial, undocumented API. Endpoints and data structures are subject to change and may be prone to randomly breaking at any time.
 
 ---
 
