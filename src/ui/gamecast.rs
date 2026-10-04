@@ -431,14 +431,14 @@ fn render_score_banner(
         center_lines.push(Line::from(vec![
             Span::styled(" │", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
             Span::styled(
-                format!(" {:>4} ", away_score),
+                format!("{:^6}", away_score),
                 Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
             ),
             Span::styled("│", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-            Span::styled("  ━   ", Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD)),
+            Span::styled("   ━━   ", Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD)),
             Span::styled("│", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
             Span::styled(
-                format!(" {:>4} ", home_score),
+                format!("{:^6}", home_score),
                 Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
             ),
             Span::styled("│ ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
@@ -1937,6 +1937,97 @@ mod tests {
         assert_eq!(td.team_name, "Oregon State Beavers");
         assert!(td.play_text.contains("TOUCHDOWN"));
         assert_eq!(td.quarter_clock, "Q4 07:31");
+    }
+
+    #[test]
+    fn test_score_border_alignment_render() {
+        let app = App::new();
+        let summary = GameSummary {
+            boxscore: None,
+            game_info: None,
+            drives: None,
+            scoring_plays: vec![],
+            header: None,
+            win_probability: vec![],
+        };
+        let field_data = FieldData {
+            away_team_abbrev: "ORST".to_string(),
+            home_team_abbrev: "CSU".to_string(),
+            possession_team_abbrev: None,
+            is_away_possession: false,
+            visual_yard_line: None,
+            possession_text: None,
+            last_play_text: None,
+            down: None,
+            distance: None,
+            down_distance_text: None,
+            drive_summary: None,
+            is_red_zone: false,
+        };
+
+        let backend = ratatui::backend::TestBackend::new(80, 10);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|f| {
+            render_score_banner(f, ratatui::layout::Rect::new(0, 0, 80, 7), &app, &summary, None, &field_data, None);
+        }).unwrap();
+
+        let buffer = terminal.backend().buffer().clone();
+
+        // Verify vertical alignment of side bars with top and bottom corners
+        // Away score box:
+        assert_eq!(buffer[(28, 1)].symbol(), "╭");
+        assert_eq!(buffer[(28, 2)].symbol(), "│");
+        assert_eq!(buffer[(28, 3)].symbol(), "╰");
+
+        assert_eq!(buffer[(35, 1)].symbol(), "╮");
+        assert_eq!(buffer[(35, 2)].symbol(), "│");
+        assert_eq!(buffer[(35, 3)].symbol(), "╯");
+
+        // Home score box:
+        assert_eq!(buffer[(44, 1)].symbol(), "╭");
+        assert_eq!(buffer[(44, 2)].symbol(), "│");
+        assert_eq!(buffer[(44, 3)].symbol(), "╰");
+
+        assert_eq!(buffer[(51, 1)].symbol(), "╮");
+        assert_eq!(buffer[(51, 2)].symbol(), "│");
+        assert_eq!(buffer[(51, 3)].symbol(), "╯");
+
+        // Test across other widths (66, 100, 120, 208) to ensure alignment holds regardless of column centering
+        for test_width in [66, 100, 120, 208] {
+            let backend = ratatui::backend::TestBackend::new(test_width, 10);
+            let mut terminal = ratatui::Terminal::new(backend).unwrap();
+            terminal.draw(|f| {
+                render_score_banner(f, ratatui::layout::Rect::new(0, 0, test_width, 7), &app, &summary, None, &field_data, None);
+            }).unwrap();
+            let buf = terminal.backend().buffer().clone();
+
+            // Find where the away box starts in row 1
+            let mut away_left_x = None;
+            for x in 0..test_width {
+                if buf[(x, 1)].symbol() == "╭" {
+                    away_left_x = Some(x);
+                    break;
+                }
+            }
+            let x0 = away_left_x.expect("Found away top left corner");
+            assert_eq!(buf[(x0, 1)].symbol(), "╭");
+            assert_eq!(buf[(x0, 2)].symbol(), "│");
+            assert_eq!(buf[(x0, 3)].symbol(), "╰");
+
+            assert_eq!(buf[(x0 + 7, 1)].symbol(), "╮");
+            assert_eq!(buf[(x0 + 7, 2)].symbol(), "│");
+            assert_eq!(buf[(x0 + 7, 3)].symbol(), "╯");
+
+            // Home box
+            let x1 = x0 + 16;
+            assert_eq!(buf[(x1, 1)].symbol(), "╭");
+            assert_eq!(buf[(x1, 2)].symbol(), "│");
+            assert_eq!(buf[(x1, 3)].symbol(), "╰");
+
+            assert_eq!(buf[(x1 + 7, 1)].symbol(), "╮");
+            assert_eq!(buf[(x1 + 7, 2)].symbol(), "│");
+            assert_eq!(buf[(x1 + 7, 3)].symbol(), "╯");
+        }
     }
 }
 
