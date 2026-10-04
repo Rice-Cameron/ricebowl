@@ -1,76 +1,66 @@
-# 🍚 ricebowl: College Football Live Terminal UI
+# ricebowl
 
-A fast, async terminal user interface (TUI) written in Rust to track live College Football scores, play-by-play, field position, ball possession, drive charts, and player statistics using ESPN's free public REST API.
-
----
-
-## ✨ Features
-
-- **🔴 Live Scoreboard:**
-  - Real-time scores, quarter, game clock, timeouts, and TV network info.
-  - Live down & distance with ball possession indicators (`🏈`).
-  - Top 25 AP rankings and team records.
-- **⭐ Favorite Teams:**
-  - Mark any team as a favorite with `f`.
-  - Favorited teams are pinned with gold stars (`★`) to the top of the scoreboard.
-  - Filter games to show only your favorites.
-  - Automatically saved to `~/.config/ricebowl/config.json`.
-- **🏟️ Visual Football Field & Gamecast:**
-  - Dynamic 100-yard ASCII football field with end zones, yard lines, and hash marks.
-  - Real-time line-of-scrimmage marker (`🏈`) and 1st down target line (`┃`).
-  - Red zone indicator (`[🚨 RED ZONE]`).
-  - Current drive stats (plays, yards, elapsed time).
-  - Scoring summary with quarter-by-quarter breakdown.
-- **📜 Play-by-Play:**
-  - Chronological play feed with color-coded tags: `[SCORE]`, `[TURNOVER]`, `[PENALTY]`, `[1ST DOWN]`.
-  - Scrollable with `j`/`k` or `PgUp`/`PgDn`.
-- **📊 Box Score & Player Stats:**
-  - Categorized player statistics: **Passing**, **Rushing**, **Receiving**, **Defense**, and **Kicking**.
-  - Side-by-side or stacked comparative tables for Away and Home teams.
-  - Switch categories instantly with `h`/`l` or Left/Right arrows.
-- **📈 Team Stats & Venue Info:**
-  - Head-to-head comparison for 1st downs, 3rd/4th down efficiency, total yards, passing/rushing yards, turnovers, penalties, and time of possession.
-  - Stadium name, city, state, temperature, and weather conditions.
-- **⚡ Async & Non-Blocking:**
-  - Automatic background refresh every 15 seconds.
-  - Zero terminal stutter or input lag thanks to Tokio async background channels.
+A terminal user interface (TUI) for tracking live NCAA College Football scores, play-by-play, field position, drive charts, and player statistics using ESPN's public API. Built with Rust and Ratatui.
 
 ---
 
-## ⌨️ Keybindings
+## Features
 
-### Global & Scoreboard View
-| Key | Action |
-| :--- | :--- |
-| `j` / `↓` | Move selection down |
-| `k` / `↑` | Move selection up |
-| `Enter` | Open game details / gamecast |
-| `Tab` | Cycle filters (`All FBS` → `Favorites ★` → `Live Now ●` → `Top 25`) |
-| `f` | Open favorite team toggle dialog |
-| `r` | Manually force refresh scores |
-| `?` | Toggle keyboard shortcuts help popup |
-| `q` | Quit application |
-
-### Game Details View
-| Key | Action |
-| :--- | :--- |
-| `Esc` / `Backspace` / `q` | Return to scoreboard list |
-| `1` - `4` | Directly switch tabs (`1: Gamecast`, `2: Plays`, `3: Box Score`, `4: Team Stats`) |
-| `Tab` / `Shift-Tab` | Cycle tabs forward / backward |
-| `h` / `l` or `←` / `→` | Switch stat category in Box Score (Passing, Rushing, Receiving, Defense, Kicking) |
-| `j` / `k` or `PgUp` / `PgDn` | Scroll through plays or player lists |
-| `r` | Refresh the active game's play-by-play and stats |
+- **Live Scoreboard**: Real-time scores, quarter, game clock, timeouts, TV network info, AP Top 25 rankings, records, and live down & distance.
+- **Visual Gamecast & Field View**: Dynamic 100-yard ASCII football field showing line of scrimmage, first down marker, red zone status, and drive summaries.
+- **Play-by-Play**: Full chronological play feed tagged by play type (scoring plays, turnovers, penalties, and first downs).
+- **Box Scores & Player Stats**: Detailed player statistics categorized across Passing, Rushing, Receiving, Defense, and Kicking.
+- **Team Stats & Game Info**: Head-to-head comparison for first downs, 3rd/4th down efficiency, total yards, turnovers, penalties, and time of possession, plus venue and weather conditions.
+- **Favorite Teams**: Save favorite teams to `~/.config/ricebowl/config.json` with quick filter cycling (`Tab`).
+- **Touchdown Alerts**: In-app celebration banner and overlay animation when a touchdown occurs.
+- **Async & Responsive**: Automatic 15-second background polling via Tokio channels without UI stutter or input lag.
 
 ---
 
-## 🚀 Running the App
+## Installation
+
+### From Source
+
+Requires Rust and Cargo:
 
 ```bash
-cd ~/Projects/ricebowl
-cargo run --release
-```
-
-Or install to `~/.cargo/bin`:
-```bash
+git clone git@github.com:Rice-Cameron/ricebowl.git
+cd ricebowl
 cargo install --path .
 ```
+
+Or build the release binary directly:
+
+```bash
+cargo build --release
+# Executable will be located at target/release/ricebowl
+```
+
+---
+
+## Keybindings
+
+### Scoreboard View
+
+| Key | Action |
+| :--- | :--- |
+| `j` / `Down` | Move down |
+| `k` / `Up` | Move up |
+| `Enter` | Open game details |
+| `Tab` | Cycle filters (All FBS -> Favorites -> Live -> Top 25) |
+| `f` | Toggle favorite status for selected game's teams |
+| `r` | Force refresh scores |
+| `?` | Show help modal |
+| `q` | Quit |
+
+### Game Details View
+
+| Key | Action |
+| :--- | :--- |
+| `Esc` / `Backspace` / `q` | Return to scoreboard |
+| `1` - `4` | Select tab (1: Gamecast, 2: Plays, 3: Box Score, 4: Team Stats) |
+| `Tab` / `Shift+Tab` | Cycle tabs forward / backward |
+| `h` / `l` or `Left` / `Right` | Switch stat category in Box Score |
+| `j` / `k` or `PgUp` / `PgDn` | Scroll plays or player lists |
+| `t` | Trigger touchdown celebration animation |
+| `r` | Force refresh active game data |
