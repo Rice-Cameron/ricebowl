@@ -28,6 +28,7 @@ pub fn render_help_modal(f: &mut Frame, area: Rect) {
         Line::from("  1 - 4 or Tab        : Switch between Gamecast, Plays, Boxscore, Team Stats"),
         Line::from("  h / l or ← / →      : Switch stat category in Boxscore view"),
         Line::from("  j / k or PgUp/PgDn  : Scroll plays or stats list"),
+        Line::from("  t (on Gamecast)     : Replay / preview Touchdown celebration animation"),
         Line::from(""),
         Line::from(Span::styled("Favorites & Filters", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))),
         Line::from("  f                   : Open Favorite dialog for selected game"),

@@ -5,6 +5,7 @@ pub mod help;
 pub mod plays;
 pub mod scoreboard;
 pub mod team_stats;
+pub mod touchdown;
 
 use crate::app::{App, DetailTab, ViewMode};
 use ratatui::{
@@ -28,7 +29,9 @@ pub fn render(f: &mut Frame, app: &App) {
     }
 
     // Modal overlays
-    if app.show_fav_dialog {
+    if let Some(td) = &app.touchdown_celebration {
+        touchdown::render_touchdown_overlay(f, size, td);
+    } else if app.show_fav_dialog {
         help::render_fav_dialog(f, size, app);
     } else if app.show_help {
         help::render_help_modal(f, size);
@@ -109,8 +112,9 @@ fn render_detail_bottom_bar(f: &mut Frame, area: Rect, app: &App) {
     };
 
     let line = Line::from(vec![
-        ratatui::text::Span::styled(" [Esc/q] Back to Scoreboard ", Style::default().fg(Color::Yellow)),
-        ratatui::text::Span::styled(" [1-4/Tab] Switch Tabs ", Style::default().fg(Color::Yellow)),
+        ratatui::text::Span::styled(" [Esc/q] Back ", Style::default().fg(Color::Yellow)),
+        ratatui::text::Span::styled(" [1-4/Tab] Tabs ", Style::default().fg(Color::Yellow)),
+        ratatui::text::Span::styled(" [t] TD Celebration ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
         ratatui::text::Span::styled(" [r] Refresh ", Style::default().fg(Color::Yellow)),
         ratatui::text::Span::styled(" [?] Help ", Style::default().fg(Color::Yellow)),
         ratatui::text::Span::styled(format!("  {}", status_line), Style::default().fg(Color::Green)),

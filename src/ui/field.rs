@@ -54,6 +54,18 @@ pub fn render_football_field(f: &mut Frame, area: Rect, data: &FieldData) {
                 .bg(Color::Yellow)
                 .add_modifier(Modifier::BOLD),
         ));
+    } else if down_dist_str == "Touchdown" {
+        header_spans.push(Span::styled(
+            " SITUATION: ",
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        ));
+        header_spans.push(Span::styled(
+            " 🚨 TOUCHDOWN! 🚨 ",
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ));
     } else {
         header_spans.push(Span::styled(
             " SITUATION: ",
@@ -197,10 +209,26 @@ fn render_field_graphic(f: &mut Frame, area: Rect, data: &FieldData) {
 
     // Action row with ball and 1st down marker
     let mut action_spans = Vec::new();
-    let left_ez_text = format!("[{:^width$}]", data.away_team_abbrev, width = ez_width.saturating_sub(2));
-    action_spans.push(Span::styled(left_ez_text, Style::default().fg(Color::Cyan).bg(Color::DarkGray).add_modifier(Modifier::BOLD)));
+    let is_touchdown = data.down_distance_text.as_deref() == Some("Touchdown");
+    let left_ez_text = if is_touchdown && data.is_away_possession {
+        format!("[{:^width$}]", "⭐TD⭐", width = ez_width.saturating_sub(2))
+    } else {
+        format!("[{:^width$}]", data.away_team_abbrev, width = ez_width.saturating_sub(2))
+    };
+    let left_ez_style = if is_touchdown && data.is_away_possession {
+        Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::Cyan).bg(Color::DarkGray).add_modifier(Modifier::BOLD)
+    };
+    action_spans.push(Span::styled(left_ez_text, left_ez_style));
 
-    let ball_symbol = if data.is_away_possession { "▶" } else { "◀" };
+    let ball_symbol = if is_touchdown {
+        "🏈"
+    } else if data.is_away_possession {
+        "▶"
+    } else {
+        "◀"
+    };
 
     for col in ez_width..(field_width - ez_width) {
         if col == ball_col {
@@ -226,8 +254,17 @@ fn render_field_graphic(f: &mut Frame, area: Rect, data: &FieldData) {
         }
     }
 
-    let right_ez_text = format!("[{:^width$}]", data.home_team_abbrev, width = ez_width.saturating_sub(2));
-    action_spans.push(Span::styled(right_ez_text, Style::default().fg(Color::LightBlue).bg(Color::DarkGray).add_modifier(Modifier::BOLD)));
+    let right_ez_text = if is_touchdown && !data.is_away_possession {
+        format!("[{:^width$}]", "⭐TD⭐", width = ez_width.saturating_sub(2))
+    } else {
+        format!("[{:^width$}]", data.home_team_abbrev, width = ez_width.saturating_sub(2))
+    };
+    let right_ez_style = if is_touchdown && !data.is_away_possession {
+        Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::LightBlue).bg(Color::DarkGray).add_modifier(Modifier::BOLD)
+    };
+    action_spans.push(Span::styled(right_ez_text, right_ez_style));
 
     // Sideline row
     let mut sideline_str = String::with_capacity(field_width);

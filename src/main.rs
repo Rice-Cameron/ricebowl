@@ -26,7 +26,8 @@ enum AppEvent {
     Input(CEvent),
     ScoreboardResult(Result<ScoreboardResponse, String>),
     SummaryResult(String, Result<GameSummary, String>),
-    Tick,
+    AnimationTick,
+    NetworkRefresh,
 }
 
 #[tokio::main]
@@ -88,13 +89,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    // Periodic tick task (every 15s for auto-refresh)
-    let tick_tx = event_tx.clone();
+    // Animation tick task (every 60ms = ~16 FPS)
+    let anim_tx = event_tx.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_millis(60));
+        loop {
+            interval.tick().await;
+            if anim_tx.send(AppEvent::AnimationTick).await.is_err() {
+                break;
+            }
+        }
+    });
+
+    // Periodic network auto-refresh task (every 15s)
+    let refresh_tx = event_tx.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(15));
         loop {
             interval.tick().await;
-            if tick_tx.send(AppEvent::Tick).await.is_err() {
+            if refresh_tx.send(AppEvent::NetworkRefresh).await.is_err() {
                 break;
             }
         }
@@ -117,6 +130,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if let Some(event) = event_rx.recv().await {
             match event {
                 AppEvent::Input(CEvent::Key(key)) if key.kind == KeyEventKind::Press => {
+                    // Check if celebration animation is active
+                    if app.is_animating() {
+                        match key.code {
+                            KeyCode::Esc | KeyCode::Char(' ') | KeyCode::Char('q') | KeyCode::Enter | KeyCode::Char('t') => {
+                                app.dismiss_animation();
+                                continue;
+                            }
+                            _ => {}
+                        }
+                    }
+
                     // Check modal dialogs first
                     if app.show_help {
                         match key.code {
@@ -231,6 +255,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         let _ = action_tx.send(Action::FetchSummary(id)).await;
                                     }
                                 }
+                                KeyCode::Char('t') => {
+                                    if app.detail_tab == DetailTab::Gamecast {
+                                        app.trigger_touchdown_for_active_game();
+                                    }
+                                }
                                 KeyCode::Char('?') => {
                                     app.show_help = true;
                                 }
@@ -258,6 +287,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if app.active_game_id.as_deref() == Some(&event_id) {
                         match res {
                             Ok(summary) => {
+                                // Check if a new touchdown was recorded
+                                if let Some(td_info) = ui::gamecast::get_recent_touchdown(&summary, app.selected_event(), &app) {
+                                    if let Some(ref play_id) = td_info.play_id {
+                                        if app.last_seen_touchdown_id.as_ref() != Some(play_id) {
+                                            // Trigger celebration if this is an updated event
+                                            if app.last_seen_touchdown_id.is_some() {
+                                                app.trigger_touchdown_animation(
+                                                    td_info.team_name.clone(),
+                                                    td_info.team_abbrev.clone(),
+                                                    td_info.play_text.clone(),
+                                                    format!("{} {} - {} {}", td_info.away_team, td_info.away_score, td_info.home_score, td_info.home_team),
+                                                    td_info.is_away,
+                                                );
+                                            }
+                                            app.last_seen_touchdown_id = Some(play_id.clone());
+                                        }
+                                    }
+                                }
                                 app.active_summary = Some(summary);
                                 app.set_status("Gamecast updated");
                             }
@@ -267,7 +314,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                 }
-                AppEvent::Tick => {
+                AppEvent::AnimationTick => {
+                    if app.is_animating() {
+                        app.tick_animation();
+                    } else {
+                        continue;
+                    }
+                }
+                AppEvent::NetworkRefresh => {
                     // Periodic auto-refresh
                     let _ = action_tx.send(Action::FetchScoreboard).await;
                     if let Some(id) = &app.active_game_id {

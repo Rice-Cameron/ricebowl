@@ -143,6 +143,18 @@ impl BoxScoreCategory {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct TouchdownCelebration {
+    pub team_name: String,
+    pub team_abbrev: String,
+    pub play_text: String,
+    pub score_text: String,
+    pub frame: usize,
+    pub started_at: Instant,
+    pub duration_secs: f32,
+    pub is_away: bool,
+}
+
 pub struct App {
     pub view_mode: ViewMode,
     pub detail_tab: DetailTab,
@@ -164,6 +176,9 @@ pub struct App {
     pub is_loading: bool,
     pub status_message: Option<(String, Instant)>,
     pub last_updated: Option<Instant>,
+
+    pub touchdown_celebration: Option<TouchdownCelebration>,
+    pub last_seen_touchdown_id: Option<String>,
 }
 
 impl App {
@@ -186,6 +201,71 @@ impl App {
             is_loading: true,
             status_message: Some(("Starting up... fetching scores".to_string(), Instant::now())),
             last_updated: None,
+            touchdown_celebration: None,
+            last_seen_touchdown_id: None,
+        }
+    }
+
+    pub fn is_animating(&self) -> bool {
+        self.touchdown_celebration.is_some()
+    }
+
+    pub fn tick_animation(&mut self) {
+        if let Some(td) = &mut self.touchdown_celebration {
+            td.frame = td.frame.saturating_add(1);
+            if td.started_at.elapsed().as_secs_f32() >= td.duration_secs {
+                self.touchdown_celebration = None;
+            }
+        }
+    }
+
+    pub fn dismiss_animation(&mut self) {
+        self.touchdown_celebration = None;
+    }
+
+    pub fn trigger_touchdown_animation(
+        &mut self,
+        team_name: String,
+        team_abbrev: String,
+        play_text: String,
+        score_text: String,
+        is_away: bool,
+    ) {
+        self.touchdown_celebration = Some(TouchdownCelebration {
+            team_name,
+            team_abbrev,
+            play_text,
+            score_text,
+            frame: 0,
+            started_at: Instant::now(),
+            duration_secs: 4.5,
+            is_away,
+        });
+    }
+
+    pub fn trigger_touchdown_for_active_game(&mut self) {
+        let Some(summary) = &self.active_summary else {
+            return;
+        };
+        if let Some(td_info) = crate::ui::gamecast::get_recent_touchdown(summary, self.selected_event(), self) {
+            self.trigger_touchdown_animation(
+                td_info.team_name,
+                td_info.team_abbrev,
+                td_info.play_text,
+                format!("{} {} - {} {}", td_info.away_team, td_info.away_score, td_info.home_score, td_info.home_team),
+                td_info.is_away,
+            );
+        } else {
+            let (away, _) = crate::ui::gamecast::get_team_abbrevs(summary, self.selected_event());
+            let (away_name, away_score, _, _) = crate::ui::gamecast::get_competitor_info(summary, self.selected_event(), "away", self);
+            let (home_name, home_score, _, _) = crate::ui::gamecast::get_competitor_info(summary, self.selected_event(), "home", self);
+            self.trigger_touchdown_animation(
+                away_name.clone(),
+                away,
+                "15 Yd Rush TOUCHDOWN".to_string(),
+                format!("{} {} - {} {}", away_name, away_score, home_score, home_name),
+                true,
+            );
         }
     }
 

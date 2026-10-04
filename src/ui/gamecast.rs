@@ -9,36 +9,272 @@ use ratatui::{
     Frame,
 };
 
+#[derive(Debug, Clone)]
+pub struct TouchdownInfo {
+    pub team_name: String,
+    pub team_abbrev: String,
+    pub play_text: String,
+    pub quarter_clock: String,
+    pub is_away: bool,
+    pub away_team: String,
+    pub home_team: String,
+    pub away_score: String,
+    pub home_score: String,
+    pub play_id: Option<String>,
+}
+
+pub fn get_recent_touchdown(
+    summary: &GameSummary,
+    event: Option<&Event>,
+    app: &App,
+) -> Option<TouchdownInfo> {
+    let (away_team, away_score, _, _) = get_competitor_info(summary, event, "away", app);
+    let (home_team, home_score, _, _) = get_competitor_info(summary, event, "home", app);
+    let (away_abbrev, _home_abbrev) = get_team_abbrevs(summary, event);
+
+    // 1. Check scoring_plays in reverse chronological order
+    if let Some(play) = summary.scoring_plays.iter().rev().find(|p| {
+        let is_td_type = p.scoring_type.as_ref().map(|s| {
+            s.name.as_deref() == Some("touchdown")
+                || s.abbreviation.as_deref() == Some("TD")
+                || s.display_name.as_deref() == Some("Touchdown")
+        }).unwrap_or(false);
+        let is_play_type_td = p.play_type.as_ref().and_then(|t| t.text.as_deref()).map(|txt| {
+            txt.to_lowercase().contains("touchdown")
+        }).unwrap_or(false);
+        let is_text_td = p.text.as_deref().map(|txt| {
+            txt.to_uppercase().contains("TOUCHDOWN")
+        }).unwrap_or(false);
+        is_td_type || is_play_type_td || is_text_td
+    }) {
+        let qtr = play
+            .period
+            .as_ref()
+            .and_then(|p| p.number)
+            .map(|n| format!("Q{}", n))
+            .unwrap_or_else(|| "".to_string());
+        let clock = play
+            .clock
+            .as_ref()
+            .and_then(|c| c.display_value.clone())
+            .unwrap_or_default();
+        let quarter_clock = if !qtr.is_empty() && !clock.is_empty() {
+            format!("{} {}", qtr, clock)
+        } else if !qtr.is_empty() {
+            qtr
+        } else {
+            clock
+        };
+
+        let team_abbrev = play
+            .team
+            .as_ref()
+            .and_then(|t| t.abbreviation.clone())
+            .unwrap_or_else(|| away_abbrev.clone());
+        let team_name = play
+            .team
+            .as_ref()
+            .and_then(|t| t.display_name.clone())
+            .unwrap_or_else(|| team_abbrev.clone());
+
+        let is_away = team_abbrev == away_abbrev;
+        let play_text = play.text.clone().unwrap_or_else(|| "Touchdown".to_string());
+
+        return Some(TouchdownInfo {
+            team_name,
+            team_abbrev,
+            play_text,
+            quarter_clock,
+            is_away,
+            away_team,
+            home_team,
+            away_score,
+            home_score,
+            play_id: play.id.clone(),
+        });
+    }
+
+    // 2. Check current drive result
+    if let Some(drive) = summary.drives.as_ref().and_then(|d| d.current.as_ref()) {
+        let is_td_res = drive.display_result.as_deref() == Some("Touchdown")
+            || drive.result.as_deref() == Some("Touchdown");
+        if is_td_res {
+            let team_abbrev = drive
+                .team
+                .as_ref()
+                .and_then(|t| t.abbreviation.clone())
+                .unwrap_or_else(|| away_abbrev.clone());
+            let team_name = drive
+                .team
+                .as_ref()
+                .and_then(|t| t.display_name.clone())
+                .unwrap_or_else(|| team_abbrev.clone());
+            let is_away = team_abbrev == away_abbrev;
+            let last_play_text = drive
+                .plays
+                .last()
+                .and_then(|p| p.text.clone())
+                .unwrap_or_else(|| "Touchdown".to_string());
+            let play_id = drive.plays.last().and_then(|p| p.id.clone());
+
+            return Some(TouchdownInfo {
+                team_name,
+                team_abbrev,
+                play_text: last_play_text,
+                quarter_clock: "".to_string(),
+                is_away,
+                away_team,
+                home_team,
+                away_score,
+                home_score,
+                play_id,
+            });
+        }
+    }
+
+    None
+}
+
+fn get_competitor_extra_info(summary: &GameSummary, side: &str) -> (Option<String>, Option<i32>) {
+    if let Some(hdr) = &summary.header {
+        if let Some(comp) = hdr.competitions.first() {
+            if let Some(team) = comp.competitors.iter().find(|c| c.home_away.as_deref() == Some(side)) {
+                let rec = team.record.first().and_then(|r| r.summary.clone());
+                let timeouts = team.timeouts;
+                return (rec, timeouts);
+            }
+        }
+    }
+    (None, None)
+}
+
+fn format_timeouts_pips(timeouts: Option<i32>) -> String {
+    match timeouts {
+        Some(3) => "● ● ●".to_string(),
+        Some(2) => "● ● ○".to_string(),
+        Some(1) => "● ○ ○".to_string(),
+        Some(0) => "○ ○ ○".to_string(),
+        _ => "".to_string(),
+    }
+}
+
 pub fn render_gamecast(f: &mut Frame, area: Rect, app: &App, summary: &GameSummary, event: Option<&Event>) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(5),  // Big Score Banner
-            Constraint::Length(10), // Football Field & Down/Distance
-            Constraint::Min(6),     // Scoring Summary & Drive Chart
-        ])
-        .split(area);
+    let recent_td = get_recent_touchdown(summary, event, app);
+    let has_recent_td = recent_td.is_some();
+
+    let banner_height = if area.height >= 26 { 7 } else { 6 };
+    let td_alert_height = if has_recent_td { 3 } else { 0 };
+
+    let chunks = if has_recent_td {
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(banner_height),   // Big Score Banner (Front and Center)
+                Constraint::Length(td_alert_height), // Touchdown Alert Banner
+                Constraint::Length(10),              // Football Field & Down/Distance
+                Constraint::Min(5),                  // Scoring Summary & Drive Chart
+            ])
+            .split(area)
+    } else {
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(banner_height), // Big Score Banner (Front and Center)
+                Constraint::Length(10),            // Football Field & Down/Distance
+                Constraint::Min(5),                // Scoring Summary & Drive Chart
+            ])
+            .split(area)
+    };
 
     // Extract field data first so score banner can also show live down/distance!
     let field_data = extract_field_data(summary, event);
 
-    // 1. Big Score Banner
-    render_score_banner(f, chunks[0], app, summary, event, &field_data);
+    if has_recent_td {
+        // 1. Big Score Banner
+        render_score_banner(f, chunks[0], app, summary, event, &field_data, recent_td.as_ref());
 
-    // 2. Football Field & Down/Distance
-    render_football_field(f, chunks[1], &field_data);
+        // 2. Touchdown Callout Banner
+        if let Some(td) = &recent_td {
+            render_touchdown_callout_banner(f, chunks[1], td);
+        }
 
-    // 3. Lower Section: Scoring Plays & Drive Details
-    let lower_chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(50), // Scoring Plays
-            Constraint::Percentage(50), // Drive History / Leaders
-        ])
-        .split(chunks[2]);
+        // 3. Football Field & Down/Distance
+        render_football_field(f, chunks[2], &field_data);
 
-    render_scoring_plays(f, lower_chunks[0], summary);
-    render_recent_drives(f, lower_chunks[1], summary);
+        // 4. Lower Section: Scoring Plays & Drive Details
+        let lower_chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage(50), // Scoring Plays
+                Constraint::Percentage(50), // Drive History / Leaders
+            ])
+            .split(chunks[3]);
+
+        render_scoring_plays(f, lower_chunks[0], summary);
+        render_recent_drives(f, lower_chunks[1], summary);
+    } else {
+        // 1. Big Score Banner
+        render_score_banner(f, chunks[0], app, summary, event, &field_data, None);
+
+        // 2. Football Field & Down/Distance
+        render_football_field(f, chunks[1], &field_data);
+
+        // 3. Lower Section: Scoring Plays & Drive Details
+        let lower_chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage(50), // Scoring Plays
+                Constraint::Percentage(50), // Drive History / Leaders
+            ])
+            .split(chunks[2]);
+
+        render_scoring_plays(f, lower_chunks[0], summary);
+        render_recent_drives(f, lower_chunks[1], summary);
+    }
+}
+
+fn render_touchdown_callout_banner(f: &mut Frame, area: Rect, td: &TouchdownInfo) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(ratatui::widgets::BorderType::Rounded)
+        .border_style(
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )
+        .title(Span::styled(
+            " 🚨 TOUCHDOWN ALERT 🚨 ",
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        ));
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let qc = if !td.quarter_clock.is_empty() {
+        format!(" [{}]", td.quarter_clock)
+    } else {
+        "".to_string()
+    };
+
+    let line = Line::from(vec![
+        Span::styled(
+            "⚡ TOUCHDOWN: ",
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("{}! ", td.team_name),
+            Style::default()
+                .fg(if td.is_away { Color::Cyan } else { Color::LightGreen })
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("── ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            format!("\"{}\"{}", td.play_text, qc),
+            Style::default().fg(Color::White),
+        ),
+    ]).alignment(ratatui::layout::Alignment::Center);
+
+    f.render_widget(Paragraph::new(line), inner);
 }
 
 fn render_score_banner(
@@ -48,20 +284,12 @@ fn render_score_banner(
     summary: &GameSummary,
     event: Option<&Event>,
     field_data: &FieldData,
+    recent_td: Option<&TouchdownInfo>,
 ) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(Span::styled(
-            " Scoreboard ",
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
-        ));
-
-    let inner = block.inner(area);
-    f.render_widget(block, area);
-
-    // Extract Away and Home teams from Header or Event
     let (away_team, away_score, away_fav, away_rank) = get_competitor_info(summary, event, "away", app);
     let (home_team, home_score, home_fav, home_rank) = get_competitor_info(summary, event, "home", app);
+    let (away_rec, away_timeouts) = get_competitor_extra_info(summary, "away");
+    let (home_rec, home_timeouts) = get_competitor_extra_info(summary, "home");
 
     // Status text (clock, quarter, final)
     let status_text = if let Some(hdr) = &summary.header {
@@ -80,11 +308,36 @@ fn render_score_banner(
     // Possession indicator
     let (away_has_ball, home_has_ball) = get_possession(summary, event);
 
-    let away_ball_str = if away_has_ball { " 🏈" } else { "" };
-    let home_ball_str = if home_has_ball { " 🏈" } else { "" };
+    let (title_text, border_color) = if let Some(td) = recent_td {
+        (
+            format!(" 🚨 TOUCHDOWN {}! 🚨 ", td.team_abbrev),
+            Color::Yellow,
+        )
+    } else {
+        (
+            " 🏈 SCOREBOARD 🏈 ".to_string(),
+            Color::Yellow,
+        )
+    };
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(ratatui::widgets::BorderType::Rounded)
+        .border_style(Style::default().fg(border_color))
+        .title(Span::styled(
+            title_text,
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        ));
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    if inner.width < 10 || inner.height < 2 {
+        return;
+    }
 
     let away_fav_str = if away_fav { " ★" } else { "" };
-    let home_fav_str = if home_fav { " ★" } else { "" };
+    let home_fav_str = if home_fav { "★ " } else { "" };
 
     let away_rank_str = if away_rank > 0 && away_rank <= 25 {
         format!("#{} ", away_rank)
@@ -92,100 +345,255 @@ fn render_score_banner(
         "".to_string()
     };
     let home_rank_str = if home_rank > 0 && home_rank <= 25 {
-        format!("#{} ", home_rank)
+        format!(" #{}", home_rank)
     } else {
         "".to_string()
     };
 
-    let line1 = Line::from(vec![
-        Span::styled(away_rank_str, Style::default().fg(Color::Yellow)),
-        Span::styled(
-            away_team.clone(),
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(away_fav_str, Style::default().fg(Color::Yellow)),
-        Span::styled(away_ball_str, Style::default().fg(Color::Yellow)),
-        Span::styled(
-            format!("  {}", away_score),
-            Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
-        ),
-        Span::raw("    vs    "),
-        Span::styled(
-            format!("{}  ", home_score),
-            Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(home_ball_str, Style::default().fg(Color::Yellow)),
-        Span::styled(home_fav_str, Style::default().fg(Color::Yellow)),
-        Span::styled(home_rank_str, Style::default().fg(Color::Yellow)),
-        Span::styled(
-            home_team,
-            Style::default().fg(Color::LightBlue).add_modifier(Modifier::BOLD),
-        ),
-    ]);
-
-    let mut line2_spans = vec![
-        Span::styled("Status: ", Style::default().fg(Color::DarkGray)),
-        Span::styled(
-            status_text,
-            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
-        ),
-    ];
-
     let is_down_active = field_data.down.map(|d| (1..=4).contains(&d)).unwrap_or(false);
 
-    if let Some(dd) = &field_data.down_distance_text {
-        if dd != "Pregame" && dd != "Final" && dd != "Ball in play" {
-            line2_spans.push(Span::raw("    "));
-            let badge = if is_down_active {
-                format!("🏈 {} ", dd)
+    // If width >= 64, render the 3-column front-and-center scoreboard!
+    if inner.width >= 64 {
+        let cols = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage(37), // Left: Away Team (Right-aligned)
+                Constraint::Length(26),     // Center: Front & Center Score (Centered)
+                Constraint::Percentage(37), // Right: Home Team (Left-aligned)
+            ])
+            .split(inner);
+
+        // --- LEFT COLUMN: AWAY TEAM (Right Aligned) ---
+        let mut left_lines = Vec::new();
+
+        // Line 0: Rank + Team + Fav
+        left_lines.push(Line::from(vec![
+            Span::styled(away_rank_str, Style::default().fg(Color::Yellow)),
+            Span::styled(
+                away_team.clone(),
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(away_fav_str, Style::default().fg(Color::Yellow)),
+        ]).alignment(ratatui::layout::Alignment::Right));
+
+        // Line 1: Record or Info
+        let away_rec_str = away_rec.unwrap_or_default();
+        left_lines.push(Line::from(
+            Span::styled(away_rec_str, Style::default().fg(Color::DarkGray))
+        ).alignment(ratatui::layout::Alignment::Right));
+
+        // Line 2: Possession or TD Badge or Timeouts
+        let away_badge_line = if let Some(td) = recent_td {
+            if td.is_away {
+                Line::from(Span::styled(
+                    " [ 🏈 +6 TD! ] ",
+                    Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD),
+                )).alignment(ratatui::layout::Alignment::Right)
+            } else if away_has_ball {
+                Line::from(Span::styled(
+                    " 🏈 POSSESSION ",
+                    Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD),
+                )).alignment(ratatui::layout::Alignment::Right)
             } else {
-                format!("{} ", dd)
-            };
-            line2_spans.push(Span::styled(
-                badge,
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
-            ));
-        }
-    }
-
-    if field_data.is_red_zone {
-        line2_spans.push(Span::raw(" "));
-        line2_spans.push(Span::styled(
-            "[🚨 RED ZONE]",
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-        ));
-    }
-
-    let line2 = Line::from(line2_spans);
-
-    let dir_arrow = if field_data.is_away_possession { "▶" } else { "◀" };
-    let mut line3_spans = Vec::new();
-    if let Some(team) = &field_data.possession_team_abbrev {
-        line3_spans.push(Span::styled("Possession: ", Style::default().fg(Color::DarkGray)));
-        let poss_str = if is_down_active {
-            format!("{} (driving {})", team, dir_arrow)
+                let to_str = format_timeouts_pips(away_timeouts);
+                Line::from(Span::styled(
+                    if to_str.is_empty() { "".to_string() } else { format!("timeouts: {}", to_str) },
+                    Style::default().fg(Color::DarkGray),
+                )).alignment(ratatui::layout::Alignment::Right)
+            }
+        } else if away_has_ball {
+            Line::from(Span::styled(
+                " 🏈 POSSESSION ",
+                Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD),
+            )).alignment(ratatui::layout::Alignment::Right)
         } else {
-            team.clone()
+            let to_str = format_timeouts_pips(away_timeouts);
+            Line::from(Span::styled(
+                if to_str.is_empty() { "".to_string() } else { format!("timeouts: {}", to_str) },
+                Style::default().fg(Color::DarkGray),
+            )).alignment(ratatui::layout::Alignment::Right)
         };
-        line3_spans.push(Span::styled(
-            poss_str,
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-        ));
-    }
-    if let Some(ds) = &field_data.drive_summary {
-        if !line3_spans.is_empty() {
-            line3_spans.push(Span::styled("  •  ", Style::default().fg(Color::DarkGray)));
-        }
-        line3_spans.push(Span::styled("Drive: ", Style::default().fg(Color::DarkGray)));
-        line3_spans.push(Span::styled(ds.clone(), Style::default().fg(Color::Gray)));
-    }
-    let line3 = Line::from(line3_spans);
+        left_lines.push(away_badge_line);
 
-    let p = Paragraph::new(vec![line1, line2, line3]);
-    f.render_widget(p, inner);
+        f.render_widget(Paragraph::new(left_lines), cols[0]);
+
+        // --- CENTER COLUMN: FRONT AND CENTER SCORE BOX ---
+        let mut center_lines = Vec::new();
+
+        // Row 0: Top box borders
+        center_lines.push(Line::from(vec![
+            Span::styled(" ╭──────╮", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::raw("        "),
+            Span::styled("╭──────╮ ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        ]).alignment(ratatui::layout::Alignment::Center));
+
+        // Row 1: The scores!
+        center_lines.push(Line::from(vec![
+            Span::styled(" │", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                format!(" {:>4} ", away_score),
+                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("│", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled("  ━   ", Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD)),
+            Span::styled("│", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                format!(" {:>4} ", home_score),
+                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("│ ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        ]).alignment(ratatui::layout::Alignment::Center));
+
+        // Row 2: Bottom box borders
+        center_lines.push(Line::from(vec![
+            Span::styled(" ╰──────╯", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::raw("        "),
+            Span::styled("╰──────╯ ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        ]).alignment(ratatui::layout::Alignment::Center));
+
+        // Row 3: Game Clock & Status
+        center_lines.push(Line::from(
+            Span::styled(
+                status_text,
+                Style::default().fg(Color::LightGreen).add_modifier(Modifier::BOLD),
+            )
+        ).alignment(ratatui::layout::Alignment::Center));
+
+        // Row 4: Down & Distance or Touchdown tag
+        if let Some(td) = recent_td {
+            center_lines.push(Line::from(vec![
+                Span::styled("⚡ ", Style::default().fg(Color::Yellow)),
+                Span::styled(
+                    format!("TD {}!", td.team_abbrev),
+                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(" ⚡", Style::default().fg(Color::Yellow)),
+            ]).alignment(ratatui::layout::Alignment::Center));
+        } else if let Some(dd) = &field_data.down_distance_text {
+            let dd_str = if is_down_active {
+                format!("🏈 {}", dd)
+            } else {
+                dd.clone()
+            };
+            let mut dd_spans = vec![
+                Span::styled(dd_str, Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            ];
+            if field_data.is_red_zone {
+                dd_spans.push(Span::raw(" "));
+                dd_spans.push(Span::styled(
+                    "[🚨 RED ZONE]",
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                ));
+            }
+            center_lines.push(Line::from(dd_spans).alignment(ratatui::layout::Alignment::Center));
+        }
+
+        f.render_widget(Paragraph::new(center_lines), cols[1]);
+
+        // --- RIGHT COLUMN: HOME TEAM (Left Aligned) ---
+        let mut right_lines = Vec::new();
+
+        // Line 0: Fav + Team + Rank
+        right_lines.push(Line::from(vec![
+            Span::styled(home_fav_str, Style::default().fg(Color::Yellow)),
+            Span::styled(
+                home_team.clone(),
+                Style::default().fg(Color::LightBlue).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(home_rank_str, Style::default().fg(Color::Yellow)),
+        ]).alignment(ratatui::layout::Alignment::Left));
+
+        // Line 1: Record or Info
+        let home_rec_str = home_rec.unwrap_or_default();
+        right_lines.push(Line::from(
+            Span::styled(home_rec_str, Style::default().fg(Color::DarkGray))
+        ).alignment(ratatui::layout::Alignment::Left));
+
+        // Line 2: Possession or TD Badge or Timeouts
+        let home_badge_line = if let Some(td) = recent_td {
+            if !td.is_away {
+                Line::from(Span::styled(
+                    " [ 🏈 +6 TD! ] ",
+                    Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD),
+                )).alignment(ratatui::layout::Alignment::Left)
+            } else if home_has_ball {
+                Line::from(Span::styled(
+                    " 🏈 POSSESSION ",
+                    Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD),
+                )).alignment(ratatui::layout::Alignment::Left)
+            } else {
+                let to_str = format_timeouts_pips(home_timeouts);
+                Line::from(Span::styled(
+                    if to_str.is_empty() { "".to_string() } else { format!("timeouts: {}", to_str) },
+                    Style::default().fg(Color::DarkGray),
+                )).alignment(ratatui::layout::Alignment::Left)
+            }
+        } else if home_has_ball {
+            Line::from(Span::styled(
+                " 🏈 POSSESSION ",
+                Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD),
+            )).alignment(ratatui::layout::Alignment::Left)
+        } else {
+            let to_str = format_timeouts_pips(home_timeouts);
+            Line::from(Span::styled(
+                if to_str.is_empty() { "".to_string() } else { format!("timeouts: {}", to_str) },
+                Style::default().fg(Color::DarkGray),
+            )).alignment(ratatui::layout::Alignment::Left)
+        };
+        right_lines.push(home_badge_line);
+
+        f.render_widget(Paragraph::new(right_lines), cols[2]);
+    } else {
+        // --- COMPACT VIEW FOR NARROW SCREENS (< 64 cols) ---
+        let mut lines = Vec::new();
+
+        // Line 0: Front & Center Score
+        lines.push(Line::from(vec![
+            Span::styled(away_rank_str, Style::default().fg(Color::Yellow)),
+            Span::styled(away_team.clone(), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::raw(" "),
+            Span::styled(
+                format!(" [ {:>2} - {:<2} ] ", away_score, home_score),
+                Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" "),
+            Span::styled(home_team.clone(), Style::default().fg(Color::LightBlue).add_modifier(Modifier::BOLD)),
+            Span::styled(home_rank_str, Style::default().fg(Color::Yellow)),
+        ]).alignment(ratatui::layout::Alignment::Center));
+
+        // Line 1: Status & Down/Distance
+        let mut line1_spans = vec![
+            Span::styled(status_text, Style::default().fg(Color::LightGreen).add_modifier(Modifier::BOLD)),
+        ];
+        if let Some(dd) = &field_data.down_distance_text {
+            line1_spans.push(Span::raw("  |  "));
+            line1_spans.push(Span::styled(format!("🏈 {}", dd), Style::default().fg(Color::Yellow)));
+        }
+        if field_data.is_red_zone {
+            line1_spans.push(Span::raw(" "));
+            line1_spans.push(Span::styled("[RED ZONE]", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)));
+        }
+        lines.push(Line::from(line1_spans).alignment(ratatui::layout::Alignment::Center));
+
+        // Line 2: Possession / TD
+        if let Some(td) = recent_td {
+            lines.push(Line::from(Span::styled(
+                format!("⚡ TOUCHDOWN {}! ── {} ⚡", td.team_abbrev, td.play_text),
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            )).alignment(ratatui::layout::Alignment::Center));
+        } else if let Some(team) = &field_data.possession_team_abbrev {
+            let dir_arrow = if field_data.is_away_possession { "▶" } else { "◀" };
+            lines.push(Line::from(Span::styled(
+                format!("Possession: {} {}", team, dir_arrow),
+                Style::default().fg(Color::Cyan),
+            )).alignment(ratatui::layout::Alignment::Center));
+        }
+
+        f.render_widget(Paragraph::new(lines), inner);
+    }
 }
 
-fn get_competitor_info(
+pub fn get_competitor_info(
     summary: &GameSummary,
     event: Option<&Event>,
     side: &str,
@@ -332,7 +740,7 @@ fn get_competitor_ids(summary: &GameSummary, event: Option<&Event>) -> (Option<S
     (None, None)
 }
 
-fn get_team_abbrevs(summary: &GameSummary, event: Option<&Event>) -> (String, String) {
+pub fn get_team_abbrevs(summary: &GameSummary, event: Option<&Event>) -> (String, String) {
     if let Some(hdr) = &summary.header {
         if let Some(comp) = hdr.competitions.first() {
             let away = comp
@@ -1478,6 +1886,57 @@ mod tests {
         assert_eq!(field_data.visual_yard_line, Some(35), "Kickoff visual yard must be 35");
         assert_eq!(field_data.away_team_abbrev, "ORST");
         assert_eq!(field_data.home_team_abbrev, "CSU");
+    }
+
+    #[test]
+    fn test_get_recent_touchdown_scoring_play() {
+        let app = App::new();
+        let summary = GameSummary {
+            boxscore: None,
+            game_info: None,
+            drives: None,
+            scoring_plays: vec![
+                crate::models::ScoringPlay {
+                    id: Some("td1".to_string()),
+                    play_type: Some(crate::models::PlayType {
+                        id: Some("67".to_string()),
+                        text: Some("Passing Touchdown".to_string()),
+                        abbreviation: Some("TD".to_string()),
+                    }),
+                    text: Some("B.Atkinson pass complete to E.Olsen for 8 yards to CSU00 TOUCHDOWN".to_string()),
+                    away_score: Some(21),
+                    home_score: Some(14),
+                    period: Some(crate::models::Period {
+                        number: Some(4),
+                        display_value: Some("4th".to_string()),
+                    }),
+                    clock: Some(crate::models::DisplayValue {
+                        display_value: Some("07:31".to_string()),
+                    }),
+                    team: Some(crate::models::DriveTeam {
+                        id: Some("204".to_string()),
+                        display_name: Some("Oregon State Beavers".to_string()),
+                        abbreviation: Some("ORST".to_string()),
+                        logo: None,
+                    }),
+                    scoring_type: Some(crate::models::ScoringType {
+                        name: Some("touchdown".to_string()),
+                        display_name: Some("Touchdown".to_string()),
+                        abbreviation: Some("TD".to_string()),
+                    }),
+                },
+            ],
+            header: None,
+            win_probability: vec![],
+        };
+
+        let td_info = get_recent_touchdown(&summary, None, &app);
+        assert!(td_info.is_some());
+        let td = td_info.unwrap();
+        assert_eq!(td.team_abbrev, "ORST");
+        assert_eq!(td.team_name, "Oregon State Beavers");
+        assert!(td.play_text.contains("TOUCHDOWN"));
+        assert_eq!(td.quarter_clock, "Q4 07:31");
     }
 }
 
