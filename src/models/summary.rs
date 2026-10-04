@@ -25,6 +25,19 @@ pub struct HeaderCompetition {
     #[serde(default)]
     pub competitors: Vec<HeaderCompetitor>,
     pub status: Option<HeaderStatus>,
+    #[serde(default)]
+    pub broadcasts: Vec<HeaderBroadcast>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct HeaderBroadcast {
+    pub media: Option<HeaderMedia>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct HeaderMedia {
+    #[serde(rename = "shortName")]
+    pub short_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

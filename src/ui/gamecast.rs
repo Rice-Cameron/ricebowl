@@ -291,16 +291,28 @@ fn render_score_banner(
     let (away_rec, away_timeouts) = get_competitor_extra_info(summary, "away");
     let (home_rec, home_timeouts) = get_competitor_extra_info(summary, "home");
 
-    // Status text (clock, quarter, final)
+    let broadcast_network = get_broadcast_network(summary, event);
+
+    // Status text (clock, quarter, final) - prefer short_detail when TV network is shown to prevent horizontal overflow in center box
     let status_text = if let Some(hdr) = &summary.header {
         hdr.competitions
             .first()
             .and_then(|c| c.status.as_ref())
             .and_then(|s| s.status_type.as_ref())
-            .and_then(|st| st.detail.as_deref())
+            .and_then(|st| {
+                if broadcast_network.is_some() {
+                    st.short_detail.as_deref().or(st.detail.as_deref())
+                } else {
+                    st.detail.as_deref()
+                }
+            })
             .unwrap_or("In Progress")
     } else if let Some(ev) = event {
-        ev.status.status_type.detail.as_str()
+        if broadcast_network.is_some() && !ev.status.status_type.short_detail.is_empty() {
+            ev.status.status_type.short_detail.as_str()
+        } else {
+            ev.status.status_type.detail.as_str()
+        }
     } else {
         "Live"
     };
@@ -309,8 +321,20 @@ fn render_score_banner(
     let (away_has_ball, home_has_ball) = get_possession(summary, event);
 
     let (title_text, border_color) = if let Some(td) = recent_td {
+        if let Some(net) = &broadcast_network {
+            (
+                format!(" 🚨 TOUCHDOWN {}!  [TV: {}] 🚨 ", td.team_abbrev, net),
+                Color::Yellow,
+            )
+        } else {
+            (
+                format!(" 🚨 TOUCHDOWN {}! 🚨 ", td.team_abbrev),
+                Color::Yellow,
+            )
+        }
+    } else if let Some(net) = &broadcast_network {
         (
-            format!(" 🚨 TOUCHDOWN {}! 🚨 ", td.team_abbrev),
+            format!(" 🏈 SCOREBOARD  [TV: {}] 🏈 ", net),
             Color::Yellow,
         )
     } else {
@@ -451,13 +475,21 @@ fn render_score_banner(
             Span::styled("╰──────╯ ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
         ]).alignment(ratatui::layout::Alignment::Center));
 
-        // Row 3: Game Clock & Status
-        center_lines.push(Line::from(
+        // Row 3: Game Clock & Status + Broadcast TV Network
+        let mut status_spans = vec![
             Span::styled(
                 status_text,
                 Style::default().fg(Color::LightGreen).add_modifier(Modifier::BOLD),
-            )
-        ).alignment(ratatui::layout::Alignment::Center));
+            ),
+        ];
+        if let Some(net) = &broadcast_network {
+            status_spans.push(Span::styled(" • ", Style::default().fg(Color::DarkGray)));
+            status_spans.push(Span::styled(
+                format!("📺 {}", net),
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            ));
+        }
+        center_lines.push(Line::from(status_spans).alignment(ratatui::layout::Alignment::Center));
 
         // Row 4: Down & Distance or Touchdown tag
         if let Some(td) = recent_td {
@@ -561,10 +593,17 @@ fn render_score_banner(
             Span::styled(home_rank_str, Style::default().fg(Color::Yellow)),
         ]).alignment(ratatui::layout::Alignment::Center));
 
-        // Line 1: Status & Down/Distance
+        // Line 1: Status & TV & Down/Distance
         let mut line1_spans = vec![
             Span::styled(status_text, Style::default().fg(Color::LightGreen).add_modifier(Modifier::BOLD)),
         ];
+        if let Some(net) = &broadcast_network {
+            line1_spans.push(Span::styled(" • ", Style::default().fg(Color::DarkGray)));
+            line1_spans.push(Span::styled(
+                format!("📺 {}", net),
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            ));
+        }
         if let Some(dd) = &field_data.down_distance_text {
             line1_spans.push(Span::raw("  |  "));
             line1_spans.push(Span::styled(format!("🏈 {}", dd), Style::default().fg(Color::Yellow)));
@@ -700,6 +739,50 @@ fn get_possession(summary: &GameSummary, event: Option<&Event>) -> (bool, bool) 
     }
 
     (false, false)
+}
+
+fn shorten_network_name(name: &str) -> String {
+    match name {
+        "ACC Network" => "ACCN".to_string(),
+        "SEC Network" => "SECN".to_string(),
+        "Big Ten Network" => "BTN".to_string(),
+        "The CW Network" | "The CW" => "CW".to_string(),
+        "Pac-12 Network" => "P12N".to_string(),
+        "CBS Sports Network" => "CBSSN".to_string(),
+        other => other.to_string(),
+    }
+}
+
+pub fn get_broadcast_network(summary: &GameSummary, event: Option<&Event>) -> Option<String> {
+    // 1. From event in scoreboard (most direct, e.g. ["FOX"], ["USA Net"], ["ABC"])
+    if let Some(bc) = event
+        .and_then(|e| e.competitions.first())
+        .and_then(|c| c.broadcasts.first())
+        .and_then(|b| b.names.first())
+    {
+        let trimmed = bc.trim();
+        if !trimmed.is_empty() {
+            return Some(shorten_network_name(trimmed));
+        }
+    }
+
+    // 2. From summary header competition broadcasts
+    if let Some(hdr) = &summary.header {
+        if let Some(comp) = hdr.competitions.first() {
+            if let Some(bc) = comp.broadcasts.first() {
+                if let Some(media) = &bc.media {
+                    if let Some(name) = &media.short_name {
+                        let trimmed = name.trim();
+                        if !trimmed.is_empty() {
+                            return Some(shorten_network_name(trimmed));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    None
 }
 
 fn get_competitor_ids(summary: &GameSummary, event: Option<&Event>) -> (Option<String>, Option<String>) {
@@ -2027,6 +2110,191 @@ mod tests {
             assert_eq!(buf[(x1 + 7, 1)].symbol(), "╮");
             assert_eq!(buf[(x1 + 7, 2)].symbol(), "│");
             assert_eq!(buf[(x1 + 7, 3)].symbol(), "╯");
+        }
+    }
+
+    #[test]
+    fn test_get_broadcast_network() {
+        let event = Event {
+            id: "123".to_string(),
+            date: "2026-10-03T17:00:00Z".to_string(),
+            name: "Team A vs Team B".to_string(),
+            short_name: "A @ B".to_string(),
+            status: crate::models::scoreboard::EventStatus {
+                display_clock: Some("10:00".to_string()),
+                period: Some(2),
+                status_type: crate::models::scoreboard::StatusType {
+                    id: "2".to_string(),
+                    name: "STATUS_IN_PROGRESS".to_string(),
+                    state: "in".to_string(),
+                    completed: false,
+                    description: "In Progress".to_string(),
+                    detail: "2nd Quarter".to_string(),
+                    short_detail: "2nd".to_string(),
+                },
+            },
+            competitions: vec![crate::models::Competition {
+                id: "123".to_string(),
+                date: "2026-10-03".to_string(),
+                competitors: vec![],
+                situation: None,
+                broadcasts: vec![crate::models::Broadcast {
+                    names: vec!["FOX".to_string()],
+                }],
+                venue: None,
+            }],
+        };
+
+        let summary = GameSummary {
+            boxscore: None,
+            game_info: None,
+            drives: None,
+            scoring_plays: vec![],
+            header: Some(crate::models::Header {
+                id: Some("123".to_string()),
+                competitions: vec![crate::models::HeaderCompetition {
+                    id: Some("123".to_string()),
+                    competitors: vec![],
+                    status: None,
+                    broadcasts: vec![crate::models::HeaderBroadcast {
+                        media: Some(crate::models::HeaderMedia {
+                            short_name: Some("USA Net".to_string()),
+                        }),
+                    }],
+                }],
+            }),
+            win_probability: vec![],
+        };
+
+        // When event has broadcast, returns from event
+        assert_eq!(get_broadcast_network(&summary, Some(&event)), Some("FOX".to_string()));
+
+        // When event is None, falls back to summary header
+        assert_eq!(get_broadcast_network(&summary, None), Some("USA Net".to_string()));
+
+        // Long network names are shortened
+        let mut long_event = event.clone();
+        long_event.competitions[0].broadcasts[0].names = vec!["ACC Network".to_string()];
+        assert_eq!(get_broadcast_network(&summary, Some(&long_event)), Some("ACCN".to_string()));
+    }
+
+    #[test]
+    fn test_score_banner_broadcast_rendering() {
+        let app = App::new();
+        let event = Event {
+            id: "401858478".to_string(),
+            date: "2026-10-03T17:00:00Z".to_string(),
+            name: "Washington Huskies at USC Trojans".to_string(),
+            short_name: "WASH @ USC".to_string(),
+            status: crate::models::scoreboard::EventStatus {
+                display_clock: Some("10:37".to_string()),
+                period: Some(3),
+                status_type: crate::models::scoreboard::StatusType {
+                    id: "2".to_string(),
+                    name: "STATUS_IN_PROGRESS".to_string(),
+                    state: "in".to_string(),
+                    completed: false,
+                    description: "In Progress".to_string(),
+                    detail: "10:37 - 3rd Quarter".to_string(),
+                    short_detail: "10:37 - 3rd".to_string(),
+                },
+            },
+            competitions: vec![crate::models::Competition {
+                id: "401858478".to_string(),
+                date: "2026-10-03".to_string(),
+                competitors: vec![
+                    crate::models::Competitor {
+                        id: "264".to_string(),
+                        home_away: "away".to_string(),
+                        winner: None,
+                        team: crate::models::scoreboard::Team {
+                            id: "264".to_string(),
+                            name: Some("Huskies".to_string()),
+                            display_name: "Washington Huskies".to_string(),
+                            abbreviation: "WASH".to_string(),
+                            short_display_name: Some("Washington".to_string()),
+                            color: None,
+                            alternate_color: None,
+                            logo: None,
+                        },
+                        score: Some("20".to_string()),
+                        curated_rank: None,
+                        records: vec![],
+                    },
+                    crate::models::Competitor {
+                        id: "30".to_string(),
+                        home_away: "home".to_string(),
+                        winner: None,
+                        team: crate::models::scoreboard::Team {
+                            id: "30".to_string(),
+                            name: Some("Trojans".to_string()),
+                            display_name: "USC Trojans".to_string(),
+                            abbreviation: "USC".to_string(),
+                            short_display_name: Some("USC".to_string()),
+                            color: None,
+                            alternate_color: None,
+                            logo: None,
+                        },
+                        score: Some("17".to_string()),
+                        curated_rank: None,
+                        records: vec![],
+                    },
+                ],
+                situation: None,
+                broadcasts: vec![crate::models::Broadcast {
+                    names: vec!["NBC".to_string()],
+                }],
+                venue: None,
+            }],
+        };
+
+        let summary = GameSummary {
+            boxscore: None,
+            game_info: None,
+            drives: None,
+            scoring_plays: vec![],
+            header: None,
+            win_probability: vec![],
+        };
+
+        let field_data = extract_field_data(&summary, Some(&event));
+
+        // Test rendering on standard width terminal (80 cols) and narrow width (64 cols)
+        for test_width in [64, 80, 100] {
+            let backend = ratatui::backend::TestBackend::new(test_width, 10);
+            let mut terminal = ratatui::Terminal::new(backend).unwrap();
+            terminal
+                .draw(|f| {
+                    render_score_banner(
+                        f,
+                        ratatui::layout::Rect::new(0, 0, test_width, 7),
+                        &app,
+                        &summary,
+                        Some(&event),
+                        &field_data,
+                        None,
+                    );
+                })
+                .unwrap();
+
+            let buf = terminal.backend().buffer().clone();
+
+            // Collect all rendered characters into a string
+            let mut rendered_text = String::new();
+            for y in 0..7 {
+                for x in 0..test_width {
+                    rendered_text.push_str(buf[(x, y)].symbol());
+                }
+                rendered_text.push('\n');
+            }
+
+            // Assert that NBC is present and not clipped off
+            assert!(
+                rendered_text.contains("NBC"),
+                "Width {} must display 'NBC' in scoreboard buffer:\n{}",
+                test_width,
+                rendered_text
+            );
         }
     }
 }
